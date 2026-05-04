@@ -42,6 +42,7 @@ dependencies = [
     "sqlalchemy",
     "python-frontmatter",
     "aiofiles",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
