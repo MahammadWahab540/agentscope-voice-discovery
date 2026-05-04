@@ -31,7 +31,7 @@ class GeminiRealtimeModel(RealtimeModelBase):
 
     websocket_url: str = (
         "wss://generativelanguage.googleapis.com/ws/"
-        "google.ai.generativelanguage.v1alpha.GenerativeService."
+        "google.ai.generativelanguage.v1beta.GenerativeService."
         "BidiGenerateContent?key="
     )
     """The websocket URL of the Gemini realtime model API."""

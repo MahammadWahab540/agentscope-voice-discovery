@@ -98,6 +98,7 @@ class RealtimeAgent(StateModule):
         # The queue to gather model responses.
         self._model_response_queue = Queue()
         self._model_response_handling_task = None
+        self._started = False
 
     async def start(self, outgoing_queue: Queue) -> None:
         """Establish a connection for real-time interaction.
@@ -106,19 +107,32 @@ class RealtimeAgent(StateModule):
             outgoing_queue (`Queue`):
                 The queue to push messages to the frontend and other agents.
         """
-        # Start the realtime model connection.
-        await self.model.connect(
-            self._model_response_queue,
-            instructions=self.sys_prompt,
-            tools=self.toolkit.get_json_schemas() if self.toolkit else None,
-        )
+        if not self._started:
+            # Start the realtime model connection.
+            await self.model.connect(
+                self._model_response_queue,
+                instructions=self.sys_prompt,
+                tools=self.toolkit.get_json_schemas() if self.toolkit else None,
+            )
 
-        # Start the forwarding loop.
-        self._external_event_handling_task = asyncio.create_task(
-            self._forward_loop(),
-        )
+            # Start the forwarding loop.
+            self._external_event_handling_task = asyncio.create_task(
+                self._forward_loop(),
+            )
+            self._started = True
 
-        # Start the response handling loop.
+        await self.attach_output_queue(outgoing_queue)
+
+    async def attach_output_queue(self, outgoing_queue: Queue) -> None:
+        """Attach model responses to a new outgoing queue.
+
+        Warmed agents start with a temporary queue. When a user WebSocket
+        arrives, swap only the response-forwarding task so the model
+        connection and input loop are not duplicated.
+        """
+        if self._model_response_handling_task and not self._model_response_handling_task.done():
+            self._model_response_handling_task.cancel()
+
         self._model_response_handling_task = asyncio.create_task(
             self._model_response_loop(outgoing_queue),
         )
@@ -126,10 +140,14 @@ class RealtimeAgent(StateModule):
     async def stop(self) -> None:
         """Close the connection."""
 
-        if not self._external_event_handling_task.done():
+        if self._external_event_handling_task and not self._external_event_handling_task.done():
             self._external_event_handling_task.cancel()
 
+        if self._model_response_handling_task and not self._model_response_handling_task.done():
+            self._model_response_handling_task.cancel()
+
         await self.model.disconnect()
+        self._started = False
 
     async def _forward_loop(self) -> None:
         """The loop to forward messages from other agents or the frontend to

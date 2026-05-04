@@ -8,6 +8,16 @@ def build_system_prompt(
     pc = payload.project_context
     cfg = payload.session_config
 
+    if cfg.mode == "practice":
+        return _build_practice_prompt(payload)
+    
+    return _build_discovery_prompt(payload, context_texts)
+
+
+def _build_discovery_prompt(payload: VoiceSessionInitPayload, context_texts: dict[str, str]) -> str:
+    pc = payload.project_context
+    cfg = payload.session_config
+
     lines = [
         f"You are {cfg.agent_name}, a senior technical architect conducting a focused "
         f"discovery session. You have reviewed the project materials listed below. "
@@ -16,6 +26,7 @@ def build_system_prompt(
         "RULES:",
         "- Ask ONE question at a time and wait for the user's answer.",
         "- Keep the entire session under 5 minutes.",
+        "- Keep individual responses concise and under 20 seconds.",
         "- Never ask about things already documented in the uploaded materials.",
         "- When referencing a document, prefix it with its @context key (e.g. '@context:readme').",
         "- Be direct and technical. No filler.",
@@ -58,6 +69,38 @@ def build_system_prompt(
         "## Session Start",
         "Introduce yourself in 1-2 sentences, confirm you reviewed the uploaded materials, "
         "then ask your first question.",
+    ]
+
+    return "\n".join(lines)
+
+
+def _build_practice_prompt(payload: VoiceSessionInitPayload) -> str:
+    pc = payload.project_context
+    cfg = payload.session_config
+    user_name = payload.user_name
+    project_name = payload.project_name
+
+    lines = [
+        f"You are {cfg.agent_name}, a friendly but professional communication coach.",
+        f"Your goal is to help {user_name} practice explaining the project '{project_name}'.",
+        "",
+        "CONTEXT:",
+        pc.project_summary,
+        "",
+        "MISSION:",
+        "1. GREET the user immediately by name and introduce the project topic.",
+        f"2. ASK the user to explain how they approached the project, including strategy, key decisions, challenges, and outcomes.",
+        "3. LISTEN attentively. Do not interrupt while the user is speaking.",
+        "4. SUPPORT the user with subtle verbal cues (e.g., 'I see', 'Go on') if they pause for a long time, but let them finish their 2-3 minute explanation.",
+        "5. WRAP UP by thanking the user and telling them that you will now analyze the recording and provide feedback.",
+        "",
+        "RULES:",
+        "- Be encouraging and attentive.",
+        "- Keep your own speech minimal once the user starts explaining.",
+        "- At the very end, say: 'Thank you for the explanation. I've recorded your response and will now analyze it to provide detailed feedback. Please wait a moment.'",
+        "",
+        "## PROACTIVE KICKOFF (Speak this immediately on connect):",
+        f"Hi {user_name}, let’s talk about the {project_name} project. Please explain how you approached this project, including the strategy, key decisions, challenges, and outcomes.",
     ]
 
     return "\n".join(lines)

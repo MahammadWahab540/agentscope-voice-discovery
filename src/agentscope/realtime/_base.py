@@ -83,6 +83,7 @@ class RealtimeModelBase:
         """
         import websockets
 
+        print(f"DEBUG: Connecting to {self.websocket_url[:50]}...")
         self._websocket = await websockets.connect(
             self.websocket_url,
             additional_headers=self.websocket_headers,
@@ -93,6 +94,27 @@ class RealtimeModelBase:
         )
 
         # Updating the session with instructions and other configurations
+        session_config = self._build_session_config(instructions, tools)
+        await self._websocket.send(
+            json.dumps(session_config, ensure_ascii=False),
+        )
+
+    async def update_instructions(
+        self,
+        instructions: str,
+        tools: list[dict] | None = None,
+    ) -> None:
+        """Update the session configuration with new instructions.
+
+        Args:
+            instructions (`str`):
+                The instructions to guide the realtime model's behavior.
+            tools (`list[dict]`, *optional*):
+                The list of tools JSON schemas.
+        """
+        if not self._websocket:
+            raise RuntimeError("WebSocket is not connected.")
+        
         session_config = self._build_session_config(instructions, tools)
         await self._websocket.send(
             json.dumps(session_config, ensure_ascii=False),

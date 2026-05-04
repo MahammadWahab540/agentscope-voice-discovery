@@ -46,17 +46,21 @@ async def flush_transcript_to_supabase(session_id: str) -> bool:
             resp.raise_for_status()
 
             ended_at = datetime.now(timezone.utc).isoformat()
+            patch_data = {
+                "status": "ended",
+                "ended_at": ended_at,
+                "transcript_saved": True,
+                "question_count": sum(
+                    1 for t in transcript if t["speaker"] == "agent"
+                ),
+                "updated_at": ended_at,
+            }
+            if row.feedback:
+                patch_data["feedback"] = row.feedback
+            
             await client.patch(
                 f"{supa_url}/rest/v1/voice_sessions?id=eq.{voice_session_id}",
-                json={
-                    "status": "ended",
-                    "ended_at": ended_at,
-                    "transcript_saved": True,
-                    "question_count": sum(
-                        1 for t in transcript if t["speaker"] == "agent"
-                    ),
-                    "updated_at": ended_at,
-                },
+                json=patch_data,
                 headers=headers,
             )
         return True

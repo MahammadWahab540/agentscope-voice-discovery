@@ -7,7 +7,10 @@ from typing import Optional
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DB_PATH = os.getenv("SQLITE_DB_PATH", "./voice_discovery.db")
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = os.getenv("SQLITE_DB_PATH", str(BASE_DIR / "voice_discovery.db"))
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 
@@ -27,6 +30,8 @@ class DiscoverySessionRow(Base):
     payload_json = Column(Text, nullable=False)
     supabase_url = Column(String, nullable=False)
     supabase_key = Column(String, nullable=False)
+    feedback = Column(Text, nullable=True)
+    recording_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -51,6 +56,8 @@ class SessionStore:
             row = db.get(DiscoverySessionRow, session_id)
             p = payload_dict
             if row is None:
+                from agentscope import logger
+                logger.info("SQLITE: Creating new session record: id=%s user=%s voice_id=%s", session_id, p["user_id"], p["supabase_callback"]["voice_session_id"])
                 row = DiscoverySessionRow(
                     session_id=session_id,
                     user_id=p["user_id"],
@@ -64,6 +71,8 @@ class SessionStore:
                 )
                 db.add(row)
             else:
+                from agentscope import logger
+                logger.info("SQLITE: Updating existing session record: id=%s", session_id)
                 row.payload_json = json.dumps(p)
             db.commit()
 
@@ -76,7 +85,11 @@ class SessionStore:
 
     def get_session(self, session_id: str) -> Optional[DiscoverySessionRow]:
         with SessionLocal() as db:
-            return db.get(DiscoverySessionRow, session_id)
+            row = db.get(DiscoverySessionRow, session_id)
+            if not row:
+                from agentscope import logger
+                logger.warning("SQLITE: Session not found: id=%s", session_id)
+            return row
 
     def delete_session(self, session_id: str) -> None:
         with SessionLocal() as db:
@@ -125,6 +138,20 @@ class SessionStore:
                 }
                 for r in rows
             ]
+
+    def set_feedback(self, session_id: str, feedback: str) -> None:
+        with SessionLocal() as db:
+            row = db.get(DiscoverySessionRow, session_id)
+            if row:
+                row.feedback = feedback
+                db.commit()
+
+    def set_recording_path(self, session_id: str, path: str) -> None:
+        with SessionLocal() as db:
+            row = db.get(DiscoverySessionRow, session_id)
+            if row:
+                row.recording_path = path
+                db.commit()
 
     def delete_transcript(self, session_id: str) -> None:
         with SessionLocal() as db:

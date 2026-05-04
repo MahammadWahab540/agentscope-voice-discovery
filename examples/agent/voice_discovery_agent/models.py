@@ -44,6 +44,7 @@ class SessionConfig(BaseModel):
     language: str = "en"
     voice_mode: str = "audio"
     agent_name: str = "Discovery"
+    mode: Literal["discovery", "practice"] = "discovery"
 
 
 class SupabaseCallback(BaseModel):
@@ -55,6 +56,8 @@ class SupabaseCallback(BaseModel):
 class VoiceSessionInitPayload(BaseModel):
     session_id: str
     user_id: str
+    user_name: str = "User"
+    project_name: str = "Project"
     project_context_id: str
     model_provider: Literal["gemini", "openai", "dashscope"] = "gemini"
     session_config: SessionConfig = Field(default_factory=SessionConfig)
