@@ -422,7 +422,7 @@ async def end_session(
     session_id: str,
     request: Request,
     x_internal_secret: str | None = Header(default=None, alias="X-Internal-Secret"),
-) -> None | JSONResponse:
+) -> None:
     logger.info(
         "[REST SESSION] Delete requested: path=%s method=DELETE session=%s auth_header=%s",
         request.url.path,
