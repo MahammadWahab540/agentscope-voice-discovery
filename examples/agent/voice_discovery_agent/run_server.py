@@ -8,9 +8,9 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from agentscope import logger
 from agentscope.agent import RealtimeAgent
@@ -97,9 +97,72 @@ async def startup_event():
     asyncio.create_task(agent_pool.fill(create_agent, 2))
 
 
-def _check_internal_key(key: str | None) -> None:
-    if INTERNAL_SERVICE_KEY and key != INTERNAL_SERVICE_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+def _structured_403(error_code: str, message: str, detail: str) -> JSONResponse:
+    """Return a structured 403 JSON response with a machine-readable error code."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error_code": error_code,
+            "message": message,
+            "detail": detail,
+        },
+    )
+
+
+def _mask_secret(value: str | None, *, visible: int = 4) -> str:
+    """Return a masked representation of a secret for safe log output."""
+    if not value:
+        return "<absent>"
+    if len(value) <= visible:
+        return "*" * len(value)
+    return value[:visible] + "****"
+
+
+def _check_internal_key(
+    key: str | None,
+    *,
+    request_path: str = "",
+    user_id: str = "",
+) -> JSONResponse | None:
+    """Validate the X-Internal-Secret header.
+
+    Returns ``None`` on success.  Returns a structured :class:`JSONResponse`
+    (HTTP 403) on failure so callers can ``return`` it directly from the
+    endpoint handler, which lets FastAPI serialise it correctly without
+    raising an exception that swallows the body.
+    """
+    if not INTERNAL_SERVICE_KEY:
+        # No secret configured — allow all internal traffic (dev / test mode).
+        return None
+
+    if key is None:
+        logger.warning(
+            "Internal auth failed: missing header | path=%s user=%s",
+            request_path,
+            user_id or "<unknown>",
+        )
+        return _structured_403(
+            error_code="invalid_internal_token",
+            message="Internal service authentication failed",
+            detail="X-Internal-Secret header is missing",
+        )
+
+    if key != INTERNAL_SERVICE_KEY:
+        logger.warning(
+            "Internal auth failed: token mismatch | path=%s user=%s "
+            "received=%s expected=%s",
+            request_path,
+            user_id or "<unknown>",
+            _mask_secret(key),
+            _mask_secret(INTERNAL_SERVICE_KEY),
+        )
+        return _structured_403(
+            error_code="invalid_internal_token",
+            message="Internal service authentication failed",
+            detail="X-Internal-Secret header value does not match the configured key",
+        )
+
+    return None
 
 
 def _is_configured_secret(value: str | None) -> bool:
@@ -272,16 +335,32 @@ async def check_models() -> dict[str, bool]:
 
 @app.post("/sessions", status_code=201, response_model=VoiceSessionCreatedResponse)
 async def create_session(
+    request: Request,
     payload: VoiceSessionInitPayload,
     x_internal_secret: str | None = Header(default=None, alias="X-Internal-Secret"),
-) -> VoiceSessionCreatedResponse:
+) -> VoiceSessionCreatedResponse | JSONResponse:
     logger.info(
-        "[REST SESSION] Create requested: session=%s user=%s model_provider=%s",
-        payload.session_id,
+        "[REST SESSION] Create requested: path=%s method=POST user=%s session=%s "
+        "model_provider=%s auth_header=%s",
+        request.url.path,
         payload.user_id,
+        payload.session_id,
         payload.model_provider,
+        _mask_secret(x_internal_secret),
     )
-    _check_internal_key(x_internal_secret)
+    auth_error = _check_internal_key(
+        x_internal_secret,
+        request_path=request.url.path,
+        user_id=payload.user_id,
+    )
+    if auth_error is not None:
+        logger.warning(
+            "[REST SESSION] Auth rejected: path=%s user=%s session=%s status=403",
+            request.url.path,
+            payload.user_id,
+            payload.session_id,
+        )
+        return auth_error
     store.upsert_session(payload.session_id, payload.model_dump())
     store.set_status(payload.session_id, "initializing")
 
@@ -290,6 +369,12 @@ async def create_session(
 
     protocol = "ws" if "localhost" in PUBLIC_HOST or "127.0.0.1" in PUBLIC_HOST else "wss"
     ws_endpoint = f"{protocol}://{PUBLIC_HOST}/ws/{payload.user_id}/{payload.session_id}"
+    logger.info(
+        "[REST SESSION] Session created: path=%s user=%s session=%s status=201",
+        request.url.path,
+        payload.user_id,
+        payload.session_id,
+    )
     return VoiceSessionCreatedResponse(
         session_id=payload.session_id,
         # Echo the stored session_id so the frontend's ws_endpoint and agentscopeSessionId
@@ -298,6 +383,7 @@ async def create_session(
         ws_endpoint=ws_endpoint,
         context_items_loaded=len(payload.context_items),
     )
+
 
 
 @app.get("/sessions/{session_id}")
@@ -334,10 +420,28 @@ async def debug_db():
 @app.delete("/sessions/{session_id}", status_code=204)
 async def end_session(
     session_id: str,
+    request: Request,
     x_internal_secret: str | None = Header(default=None, alias="X-Internal-Secret"),
-) -> None:
-    _check_internal_key(x_internal_secret)
-    logger.info("REST session delete requested: session=%s", session_id)
+) -> None | JSONResponse:
+    logger.info(
+        "[REST SESSION] Delete requested: path=%s method=DELETE session=%s auth_header=%s",
+        request.url.path,
+        session_id,
+        _mask_secret(x_internal_secret),
+    )
+    auth_error = _check_internal_key(
+        x_internal_secret,
+        request_path=request.url.path,
+        user_id="",
+    )
+    if auth_error is not None:
+        logger.warning(
+            "[REST SESSION] Auth rejected: path=%s session=%s status=403",
+            request.url.path,
+            session_id,
+        )
+        return auth_error
+    logger.info("REST session delete authorised: session=%s", session_id)
     row = store.get_session(session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
